@@ -6,7 +6,6 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
-	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

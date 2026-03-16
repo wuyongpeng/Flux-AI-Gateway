@@ -6,9 +6,11 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"strconv"
 	"time"
 
 	"flux-ai-gateway/internal/arbiter"
+	"flux-ai-gateway/internal/metrics"
 	"flux-ai-gateway/internal/scheduler"
 
 	"github.com/gin-gonic/gin"
@@ -47,8 +49,14 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 		}
 		c.Request.Body.Close()
 
-		// 1. Race / Hedged Requests
-		bestResponse := scheduler.FastResponse(c.Request.Context(), backends, body)
+		// 1. Race / Hedged / Failover Requests
+		var bestResponse scheduler.Response
+		if strategy == "hedged" {
+			bestResponse = scheduler.FastResponse(c.Request.Context(), backends, body)
+		} else {
+			bestResponse = scheduler.FailoverResponse(c.Request.Context(), backends, body)
+		}
+
 		if bestResponse.Err != nil {
 			c.JSON(500, gin.H{"error": bestResponse.Err.Error()})
 			return
@@ -99,6 +107,10 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 					ttftMsg := fmt.Sprintf("data: [Metrics] TTFT: %v (winner: %s)\n\n", ttft, winnerName)
 					c.Writer.Write([]byte(ttftMsg))
 					log.Printf("[Gateway] 🏆 最优模型: %s | TTFT: %v", winnerName, ttft)
+
+					// Record TTFT Metric
+					metrics.TTFTSeconds.WithLabelValues(winnerName).Observe(ttft.Seconds())
+
 					ttftRecorded = true
 				}
 
@@ -137,6 +149,12 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 		c.Writer.Write([]byte(fmt.Sprintf("\ndata: [Metrics] Total Answer Generation Latency: %v\n\n", totalTime)))
 		if lastTokenCount != "" {
 			c.Writer.Write([]byte(fmt.Sprintf("data: [Metrics] Total Token Usage: %s\n\n", lastTokenCount)))
+
+			// Record Token Usage Metric
+			tokens, _ := strconv.Atoi(lastTokenCount)
+			userID, _ := c.Get("UserID")
+			uIDStr, _ := userID.(string)
+			metrics.TokenUsage.WithLabelValues(bestResponse.WinnerName, uIDStr).Add(float64(tokens))
 		}
 		c.Writer.Flush()
 	}

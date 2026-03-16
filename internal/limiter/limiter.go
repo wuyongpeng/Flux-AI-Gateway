@@ -2,9 +2,10 @@ package limiter
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/time/rate"
 )
 
 type Tier string
@@ -14,13 +15,9 @@ const (
 	Normal Tier = "Normal"
 )
 
-// RateLimiter manages rate limiting for users based on their tier.
-// In a full implementation, this uses a distributed rate limiter via Redis.
+// RateLimiter manages rate limiting for users using Redis.
 type RateLimiter struct {
 	rdb *redis.Client
-
-	// Fallback in-memory limiters for simplicity in this phase
-	limits map[string]*rate.Limiter
 }
 
 func NewRateLimiter(redisAddr string) *RateLimiter {
@@ -28,26 +25,31 @@ func NewRateLimiter(redisAddr string) *RateLimiter {
 		Addr: redisAddr,
 	})
 	return &RateLimiter{
-		rdb:    rdb,
-		limits: make(map[string]*rate.Limiter),
+		rdb: rdb,
 	}
 }
 
 // Allow checks if the given userID is allowed to make a request based on their tier.
+// It uses a simple Redis-based fixed-window or token-bucket approach.
 func (rl *RateLimiter) Allow(ctx context.Context, userID string, tier Tier) bool {
-	// A simple in-memory simulation of Redis-based token bucket.
-	// VIP users get 10 req/sec, burst of 20.
-	// Normal users get 2 req/sec, burst of 5.
+	// Simple Redis implementation:
+	// Key: flux:limiter:<userid>
+	// Max requests per minute: VIP=600, Normal=120
 
-	limiter, exists := rl.limits[userID]
-	if !exists {
-		if tier == VIP {
-			limiter = rate.NewLimiter(rate.Limit(10), 20)
-		} else {
-			limiter = rate.NewLimiter(rate.Limit(2), 5)
-		}
-		rl.limits[userID] = limiter
+	key := fmt.Sprintf("flux:limiter:%s", userID)
+	limit := 120
+	if tier == VIP {
+		limit = 600
 	}
 
-	return limiter.Allow()
+	// EXECUTE IN REDIS: INCR key; EXPIRE key 60
+	pipe := rl.rdb.Pipeline()
+	incr := pipe.Incr(ctx, key)
+	pipe.Expire(ctx, key, time.Minute)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return true // Fail open if Redis is down
+	}
+
+	return int(incr.Val()) <= limit
 }
