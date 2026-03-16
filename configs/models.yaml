@@ -24,6 +24,11 @@ providers:
     api_key_env: "FLUX_ANTHROPIC_API_KEY"
     base_url: "https://api.anthropic.com/v1"
 
+  - id: "glm"
+    name: "Zhipu AI (GLM)"
+    api_key_env: "FLUX_GLM_API_KEY"
+    base_url: "https://open.bigmodel.cn/api/paas/v4"
+
 # ---- 模型注册 (Models) -------------------------------------------------------
 # 每个模型有唯一 ID，关联 provider，以及生命周期信息
 
@@ -67,32 +72,55 @@ models:
     provider: "anthropic"
     eol_date: "2099-12-31"
 
+  # --- Zhipu AI (GLM) ---
+  - id: "glm-4.6"
+    provider: "glm"
+    eol_date: "2099-12-31"
+
+  - id: "glm-4-flash"
+    provider: "glm"
+    eol_date: "2099-12-31"
+
 # ---- 场景路由 (Scenarios) ----------------------------------------------------
 # 每个场景定义主备模型 + 调度策略（hedged / failover / fallback）
 # 可以跨厂商配置主备，实现真正的跨厂商赛马
 
 scenarios:
-  # 速度优先：用 2.0-flash（无 Extended Thinking，响应快）vs gpt-4o-mini 赛马
-  # gemini-2.5 系列有 Extended Thinking，首 token 会慢 10~15s，不适合赛马场景
+  # 速度优先：使用 GLM-4-Flash (原 Gemini 2.0-flash 无额度)
   speed_racing:
-    primary: "gemini-2.0-flash"
-    backup: "gpt-4o-mini"
+    primary: "glm-4-flash"
+    backup: "glm-4.6"
     strategy: "hedged"
 
-  # 高并发：2.0-flash 主，2.0-flash-lite 备（均无 thinking，快且便宜）
+  # 高并发：GLM-4-Flash 主备
   high_concurrency:
+    primary: "glm-4-flash"
+    backup: "glm-4-flash"
+    strategy: "failover"
+
+  # 长文本：GLM-4 (质量与长度优先)
+  long_context:
+    primary: "glm-4.6"
+    backup: "glm-4-flash"
+    strategy: "fallback"
+
+  # 高质量：GLM-4 (原 GPT-4o)
+  high_quality:
+    primary: "glm-4.6"
+    backup: "glm-4-flash"
+    strategy: "hedged"
+
+  # ---- 性能对比测试场景 (Benchmarks) ------------------------------------------
+
+  # 强制 GLM-4-Flash
+  only_glm:
+    primary: "glm-4-flash"
+    backup: "glm-4.6"
+    strategy: "failover"
+
+  # 强制 Gemini (测试用，当前无额度)
+  only_gemini:
     primary: "gemini-2.0-flash"
     backup: "gemini-2.0-flash-lite"
     strategy: "failover"
 
-  # 长上下文：Pro 主（质量优先），出现 Stall 切 Flash 续写
-  long_context:
-    primary: "gemini-2.5-pro"
-    backup: "gemini-2.5-flash"
-    strategy: "fallback"
-
-  # 高质量：GPT-4o 主，Claude Sonnet 备
-  high_quality:
-    primary: "gpt-4o"
-    backup: "claude-3-7-sonnet-latest"
-    strategy: "hedged"
