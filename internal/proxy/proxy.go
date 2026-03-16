@@ -57,8 +57,17 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 			bestResponse = scheduler.FailoverResponse(c.Request.Context(), backends, body)
 		}
 
-		if bestResponse.Err != nil {
-			c.JSON(500, gin.H{"error": bestResponse.Err.Error()})
+		if bestResponse.Err != nil || bestResponse.StatusCode != 200 || bestResponse.Body == nil {
+			status := bestResponse.StatusCode
+			if status == 0 {
+				status = 500
+			}
+			errMsg := "upstream error"
+			if bestResponse.Err != nil {
+				errMsg = bestResponse.Err.Error()
+			}
+			log.Printf("[Proxy] Request failed after scheduling: status=%d, err=%v", status, bestResponse.Err)
+			c.JSON(status, gin.H{"error": errMsg})
 			return
 		}
 

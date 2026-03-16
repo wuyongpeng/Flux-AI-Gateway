@@ -81,6 +81,11 @@ models:
     provider: "glm"
     eol_date: "2099-12-31"
 
+  # ---- 容错测试专用 (Failover Test) ----
+  - id: "broken-model"
+    provider: "google"  # 故意不设 API KEY 使其走 Mock
+    eol_date: "2099-12-31"
+
 # ---- 场景路由 (Scenarios) ----------------------------------------------------
 # 每个场景定义主备模型 + 调度策略（hedged / failover / fallback）
 # 可以跨厂商配置主备，实现真正的跨厂商赛马
@@ -122,5 +127,11 @@ scenarios:
   only_gemini:
     primary: "gemini-2.0-flash"
     backup: "gemini-2.0-flash-lite"
+    strategy: "failover"
+
+  # 容错重试测试：主模型 (broken-model) 429 报错，自动切到 backup (glm-4-flash)
+  failover_test:
+    primary: "broken-model"
+    backup: "glm-4-flash"
     strategy: "failover"
 

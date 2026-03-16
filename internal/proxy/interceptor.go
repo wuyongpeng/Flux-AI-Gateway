@@ -26,6 +26,10 @@ type StreamMonitor struct {
 
 // Read implements io.Reader, intercepting standard reads to monitor latency
 func (sm *StreamMonitor) Read(p []byte) (n int, err error) {
+	if sm.OriginalReader == nil {
+		return 0, io.EOF
+	}
+
 	// First check if a stall occurred since the last chunk
 	if sm.FirstTokenRead && time.Since(sm.LastTokenTime) > sm.ITLThreshold {
 		// A stall happened before reading the next chunk.

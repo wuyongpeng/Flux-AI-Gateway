@@ -75,8 +75,8 @@ func (a *PolicyArbiter) GetBackends(scenarioName string) ([]scheduler.BackendPro
 		return []scheduler.BackendProvider{prim}, nil, "failover", nil
 	}
 
-	if scen.Strategy == "hedged" {
-		return []scheduler.BackendProvider{prim, back}, back, "hedged", nil
+	if scen.Strategy == "hedged" || scen.Strategy == "failover" || scen.Strategy == "fallback" {
+		return []scheduler.BackendProvider{prim, back}, back, scen.Strategy, nil
 	}
 
 	return []scheduler.BackendProvider{prim}, back, scen.Strategy, nil

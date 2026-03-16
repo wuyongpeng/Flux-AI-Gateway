@@ -22,6 +22,14 @@ func (m *MockBackend) Name() string {
 }
 
 func (m *MockBackend) SendRequest(ctx context.Context, body []byte) scheduler.Response {
+	// If the backend name contains "broken", simulate a 429 error
+	if len(m.BackendName) >= 6 && m.BackendName[:6] == "broken" {
+		return scheduler.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Err:        nil,
+		}
+	}
+
 	// Simulate the network call
 	select {
 	case <-time.After(m.InitialDelay):
