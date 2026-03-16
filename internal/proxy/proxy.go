@@ -19,6 +19,10 @@ import (
 // to the user via SSE, tracking TTFT and ITL.
 func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Record the true request start time at the very beginning.
+		// This is what will be used for real user-perceived TTFT.
+		requestStart := time.Now()
+
 		// Read abstract scenario from header, default to "speed_racing"
 		scenario := c.GetHeader("X-Flux-Scenario")
 		if scenario == "" {
@@ -31,7 +35,11 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 			return
 		}
 
-		log.Printf("[Proxy] Executing scenario '%s' via '%s' strategy with %d primary backends.", scenario, strategy, len(backends))
+		// 立即打印请求到达提示
+		log.Printf("[Gateway] ✅ 请求已到达 Gateway — scenario: %s", scenario)
+		if strategy == "hedged" {
+			log.Printf("[Gateway] 🏁 正在选择最优模型 (hedged race: %d backends)...", len(backends))
+		}
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "bad request"})
@@ -49,7 +57,7 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 		// 2. Wrap body with StreamMonitor
 		sm := &StreamMonitor{
 			OriginalReader: bestResponse.Body,
-			StartTime:      time.Now(),
+			StartTime:      requestStart, // true user-perceived TTFT from request arrival
 			ITLThreshold:   2 * time.Second,
 			// Handling Stall / Breakpoint failover
 			HandleStall: func(ctx context.Context, generated []byte) (io.ReadCloser, error) {
@@ -87,8 +95,10 @@ func HandleGatewayRequest(arbiter *arbiter.PolicyArbiter) gin.HandlerFunc {
 
 				if !ttftRecorded {
 					ttft := time.Since(sm.StartTime)
-					ttftMsg := fmt.Sprintf("data: [Metrics] TTFT: %v\n\n", ttft)
+					winnerName := bestResponse.WinnerName
+					ttftMsg := fmt.Sprintf("data: [Metrics] TTFT: %v (winner: %s)\n\n", ttft, winnerName)
 					c.Writer.Write([]byte(ttftMsg))
+					log.Printf("[Gateway] 🏆 最优模型: %s | TTFT: %v", winnerName, ttft)
 					ttftRecorded = true
 				}
 

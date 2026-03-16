@@ -13,6 +13,7 @@ type Response struct {
 	StatusCode int
 	Header     http.Header
 	Err        error
+	WinnerName string // name of the winning backend provider
 }
 
 // BackendProvider represents an upstream API (e.g. Gemini, OpenAI)
@@ -25,75 +26,80 @@ type BackendProvider interface {
 // FastResponse executes a Hedged Request across multiple backends.
 // It fires requests to all backends concurrently and returns the first stream
 // that successfully starts returning data (the "winner").
-// Slower or trailing requests are automatically cancelled to save tokens.
+// Losers are cancelled immediately by calling their individual context cancel funcs.
 func FastResponse(ctx context.Context, backends []BackendProvider, reqBody []byte) Response {
-	// Create a Cancellable context that will kill losers
-	raceCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	type entry struct {
+		resp Response
+		idx  int // which backend index sent this
+	}
 
-	resChan := make(chan Response, len(backends))
+	n := len(backends)
 
-	for _, backend := range backends {
-		go func(b BackendProvider) {
-			// Sending the request to the backend
-			// We clone the body since we're using it in multiple goroutines
+	// One cancel func per goroutine. Stored before goroutines launch so the
+	// main loop can cancel individual losers by index.
+	cancelFns := make([]context.CancelFunc, n)
+	resChan := make(chan entry, n)
+
+	for i, backend := range backends {
+		goroutineCtx, cancelI := context.WithCancel(ctx)
+		cancelFns[i] = cancelI
+
+		go func(b BackendProvider, myCtx context.Context, myIdx int) {
 			bCopy := make([]byte, len(reqBody))
 			copy(bCopy, reqBody)
 
-			resp := b.SendRequest(context.WithoutCancel(ctx), bCopy)
+			// HTTP call uses this goroutine's own context.
+			// When we call cancelFns[myIdx]() from the main loop, the HTTP
+			// connection is aborted immediately.
+			resp := b.SendRequest(myCtx, bCopy)
 
-			// Simple check: if not error and OK status, we push it to chan
 			if resp.Err == nil && resp.StatusCode == http.StatusOK {
-				// We peek the first byte to assure TTFT is there
+				// Peek one byte to confirm data is actually flowing (true TTFT check).
 				buf := make([]byte, 1)
-				n, err := resp.Body.Read(buf)
-				if err == nil && n > 0 {
-					// Prepend the peeked byte back
-					combinedReader := io.MultiReader(bytes.NewReader(buf), resp.Body)
+				nRead, err := resp.Body.Read(buf)
+				if err == nil && nRead > 0 {
+					combined := io.MultiReader(bytes.NewReader(buf), resp.Body)
 					resp.Body = struct {
 						io.Reader
 						io.Closer
-					}{
-						Reader: combinedReader,
-						Closer: resp.Body,
-					}
-					select {
-					case resChan <- resp:
-					case <-raceCtx.Done():
-						// We lost the race, or request was cancelled
-						if resp.Body != nil {
-							resp.Body.Close()
-						}
-					}
+					}{Reader: combined, Closer: resp.Body}
+
+					resChan <- entry{resp: resp, idx: myIdx}
 					return
 				}
 			}
 
-			// In case of error, or not status OK, we still push to unblock
-			select {
-			case resChan <- resp:
-			case <-raceCtx.Done():
-				if resp.Body != nil {
-					resp.Body.Close()
-				}
-			}
-
-		}(backend)
+			// Error / non-200 / no data — send so the main loop is unblocked.
+			resChan <- entry{resp: resp, idx: myIdx}
+		}(backend, goroutineCtx, i)
 	}
 
-	// Wait for the first *successful* response, or collect all errors
+	// Collect results. Cancel every loser individually.
+	// This means Pro's ongoing HTTP request is immediately killed by the OS
+	// the moment we call cancelFns[proIdx]().
 	var lastRes Response
 	errorsCount := 0
 
 	for range backends {
-		res := <-resChan
-		if res.Err == nil && res.StatusCode == http.StatusOK {
-			// We found a winner. Returning it triggers defers, which cancel other goroutines.
-			return res
+		e := <-resChan
+
+		if e.resp.Err == nil && e.resp.StatusCode == http.StatusOK {
+			// Winner found. Cancel ALL other goroutines' HTTP connections NOW.
+			for i, cancel := range cancelFns {
+				if i != e.idx {
+					cancel() // aborts the loser's HTTP connection immediately
+				}
+			}
+			// Tag the winning model name onto the response
+			e.resp.WinnerName = backends[e.idx].Name()
+			return e.resp
 		}
-		lastRes = res
+
+		// This candidate failed — cancel its context and mark it done.
+		cancelFns[e.idx]()
+		lastRes = e.resp
 		errorsCount++
-		if errorsCount == len(backends) {
+		if errorsCount == n {
 			return lastRes // all failed
 		}
 	}

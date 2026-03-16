@@ -72,22 +72,23 @@ models:
 # 可以跨厂商配置主备，实现真正的跨厂商赛马
 
 scenarios:
-  # 速度优先：Gemini Flash vs OpenAI mini 赛马（跨厂商）
+  # 速度优先：用 2.0-flash（无 Extended Thinking，响应快）vs gpt-4o-mini 赛马
+  # gemini-2.5 系列有 Extended Thinking，首 token 会慢 10~15s，不适合赛马场景
   speed_racing:
-    primary: "gemini-2.5-flash"
+    primary: "gemini-2.0-flash"
     backup: "gpt-4o-mini"
     strategy: "hedged"
 
-  # 高并发：Gemini 主，Flash Lite 备（省成本）
+  # 高并发：2.0-flash 主，2.0-flash-lite 备（均无 thinking，快且便宜）
   high_concurrency:
-    primary: "gemini-2.5-flash"
-    backup: "gemini-2.5-flash-lite-preview-09-2025"
+    primary: "gemini-2.0-flash"
+    backup: "gemini-2.0-flash-lite"
     strategy: "failover"
 
-  # 长上下文：Pro 主，出现 Stall 切 Claude
+  # 长上下文：Pro 主（质量优先），出现 Stall 切 Flash 续写
   long_context:
     primary: "gemini-2.5-pro"
-    backup: "claude-3-5-haiku-latest"
+    backup: "gemini-2.5-flash"
     strategy: "fallback"
 
   # 高质量：GPT-4o 主，Claude Sonnet 备
