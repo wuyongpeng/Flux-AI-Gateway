@@ -1,0 +1,97 @@
+# ==============================================================================
+# Flux-AI-Gateway — 统一模型注册表
+# 版本: v2.0
+# 最后更新: 2026-03-16
+# 说明: 新增 providers 区块，支持多厂商批量配置
+# ==============================================================================
+
+# ---- 厂商注册 (Providers) --------------------------------------------------
+# 每个厂商配置一次 API Key 和 Base URL，具体模型通过 provider_id 关联
+
+providers:
+  - id: "google"
+    name: "Google Gemini"
+    api_key_env: "FLUX_GEMINI_API_KEY"
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+
+  - id: "openai"
+    name: "OpenAI"
+    api_key_env: "FLUX_OPENAI_API_KEY"
+    base_url: "https://api.openai.com/v1"
+
+  - id: "anthropic"
+    name: "Anthropic"
+    api_key_env: "FLUX_ANTHROPIC_API_KEY"
+    base_url: "https://api.anthropic.com/v1"
+
+# ---- 模型注册 (Models) -------------------------------------------------------
+# 每个模型有唯一 ID，关联 provider，以及生命周期信息
+
+models:
+  # --- Google Gemini ---
+  - id: "gemini-2.5-pro"
+    provider: "google"
+    eol_date: "2099-12-31"
+
+  - id: "gemini-2.5-flash"
+    provider: "google"
+    eol_date: "2099-12-31"
+
+  - id: "gemini-2.5-flash-lite-preview-09-2025"
+    provider: "google"
+    eol_date: "2026-03-31"   # ⚠️ 即将到期
+
+  - id: "gemini-2.0-flash"
+    provider: "google"
+    eol_date: "2026-06-01"   # ⚠️ 2026-06 下线
+
+  - id: "gemini-2.0-flash-lite"
+    provider: "google"
+    eol_date: "2026-06-01"   # ⚠️ 2026-06 下线
+
+  # --- OpenAI ---
+  - id: "gpt-4o"
+    provider: "openai"
+    eol_date: "2099-12-31"
+
+  - id: "gpt-4o-mini"
+    provider: "openai"
+    eol_date: "2099-12-31"
+
+  # --- Anthropic ---
+  - id: "claude-3-7-sonnet-latest"
+    provider: "anthropic"
+    eol_date: "2099-12-31"
+
+  - id: "claude-3-5-haiku-latest"
+    provider: "anthropic"
+    eol_date: "2099-12-31"
+
+# ---- 场景路由 (Scenarios) ----------------------------------------------------
+# 每个场景定义主备模型 + 调度策略（hedged / failover / fallback）
+# 可以跨厂商配置主备，实现真正的跨厂商赛马
+
+scenarios:
+  # 速度优先：Gemini Flash vs OpenAI mini 赛马（跨厂商）
+  speed_racing:
+    primary: "gemini-2.5-flash"
+    backup: "gpt-4o-mini"
+    strategy: "hedged"
+
+  # 高并发：Gemini 主，Flash Lite 备（省成本）
+  high_concurrency:
+    primary: "gemini-2.5-flash"
+    backup: "gemini-2.5-flash-lite-preview-09-2025"
+    strategy: "failover"
+
+  # 长上下文：Pro 主，出现 Stall 切 Claude
+  long_context:
+    primary: "gemini-2.5-pro"
+    backup: "claude-3-5-haiku-latest"
+    strategy: "fallback"
+
+  # 高质量：GPT-4o 主，Claude Sonnet 备
+  high_quality:
+    primary: "gpt-4o"
+    backup: "claude-3-7-sonnet-latest"
+    strategy: "hedged"
